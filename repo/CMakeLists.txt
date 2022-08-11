@@ -1,2 +1,4 @@
 add_subdirectory(binascii)
-add_subdirectory(cryptopp-CRYPTOPP_8_7_0)
+add_subdirectory(AES)
+add_subdirectory(cpp-base64)
+add_subdirectory(jsoncpp)

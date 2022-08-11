@@ -4,21 +4,17 @@ project(ncm_dump CXX C)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_C_STANDARD 89)
 
-# Custom options
-set(BUILD_TEST on)
-
-# Add modules
 add_subdirectory(repo)
 
-# Add executable
-add_executable(ncm_dump main.cpp)
+add_executable(${PROJECT_NAME} main.cpp)
+target_link_libraries(${PROJECT_NAME} PRIVATE binascii)
+target_link_libraries(${PROJECT_NAME} PRIVATE AES)
+target_link_libraries(${PROJECT_NAME} PRIVATE base64)
 
-# Link libraries
-target_link_libraries(ncm_dump PRIVATE binascii)
-target_link_libraries(ncm_dump PRIVATE AES)
+get_target_property(JSON_INC_PATH jsoncpp_lib INTERFACE_INCLUDE_DIRECTORIES)
+include_directories(${JSON_INC_PATH})
 
-# Build test
-if (BUILD_TEST)
-    add_executable(test test.cpp)
-    target_link_libraries(test PRIVATE crypto)
-endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE jsoncpp_lib)
+
+add_executable(test test.cpp)
+target_link_libraries(test PRIVATE jsoncpp_lib)

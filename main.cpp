@@ -1,13 +1,12 @@
+#include "AES.h"
+#include "base64.h"
+#include "json/reader.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
-#include "cryptlib.h"
-#include "rijndael.h"
-#include "osrng.h"
-#include "hex.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,18 +18,18 @@ extern "C" {
 };
 #endif
 
-typedef std::basic_string<uint8_t> ustring;
+typedef std::vector<unsigned char> ustring;
 
 ustring a2b_hex(const char *hex_key) {
     int key_len = strlen(hex_key);
-    auto key = new uint8_t[key_len / 2 + 1];
+    auto key = new unsigned char[key_len / 2 + 1];
 
     auto res = binascii_unhexlify(hex_key, key_len, key);
     if (res) {
         std::cerr << "Error! Invalid hex key!" << std::endl;
         exit(-1);
     }
-    ustring ans{key};
+    ustring ans{key, key + key_len / 2};
 
     delete[] key;
     return ans;
@@ -54,11 +53,13 @@ void dump(const std::string &file_path) {
     auto core_key{a2b_hex("687A4852416D736F356B496E62617857")};
     auto meta_key{a2b_hex("2331346C6A6B5F215C5D2630553C2728")};
     auto unpad = [](ustring &str) {
-        if (typeid(str.back()).name() == "int") {
+        if (strcmp(typeid(str.back()).name(), "unsigned char") == 0) {
+            int num = str.back();
+            str.resize(str.size() - num);
         }
     };
 
-    std::ifstream f{file_path, std::ios::binary | std::ios::in};
+    std::ifstream f{file_path, std::ios::in | std::ios::binary};
     if (!f) {
         std::cerr << "Error! Open file failed!" << std::endl;
         exit(-1);
@@ -71,31 +72,122 @@ void dump(const std::string &file_path) {
         delete[] header;
     }
 
-    uint32_t key_length;
+    ustring key_data;
     {
         f.seekg(2, std::ios::cur);
         uint8_t length_byte[4];
         f.read((char *) length_byte, sizeof(char) * 4);
-        key_length = length_byte[0];
-    }
+        uint32_t key_length = length_byte[0];
 
-    ustring key_data;
-    {
-        auto ans = new uint8_t[key_length];
+        auto ans = new unsigned char[key_length];
         f.read((char *) ans, sizeof(char) * key_length);
         for (uint32_t i = 0; i < key_length; ++i)
             ans[i] ^= 0x64u;
-        key_data = ans;
-        delete [] ans;
+        key_data.assign(ans, ans + key_length);
+        delete[] ans;
     }
 
     {
-
+        AES cryptor{AESKeyLength::AES_128};// AES-128 has a key of 16 bytes long, so we use it.
+        auto t{cryptor.DecryptECB(key_data, core_key)};
+        unpad(t);
+        key_data.assign(t.begin() + 17, t.end());
     }
+    auto key_length = key_data.size();
+
+    ustring key_box(256, 0);
+    for (unsigned int i = 1; i < 256u; ++i)
+        key_box[i] = i;
+
+    unsigned char c = 0, last_byte = 0, key_offset = 0;
+    for (int i = 0; i < 256; ++i) {
+        auto swap = key_box[i];
+        c = swap + last_byte + key_data[key_offset];
+        ++key_offset;
+        if (key_offset >= key_length)
+            key_offset = 0;
+        key_box[i] = key_box[c];
+        key_box[c] = swap;
+        last_byte = c;
+    }
+
+    ustring meta_data;
+    {
+        uint32_t meta_length;
+        f.read((char *) &meta_length, sizeof(char) * 4);
+        auto ans = new unsigned char[meta_length];
+        f.read((char *) ans, sizeof(char) * meta_length);
+        for (int i = 0; i < meta_length; ++i) {
+            ans[i] ^= 0x63u;
+        }
+        meta_data.assign(ans + 22, ans + meta_length);
+        std::string temp(meta_data.begin(), meta_data.end());
+        temp = base64_decode(temp);
+        meta_data.assign(temp.begin(), temp.end());
+
+        delete[] ans;
+    }
+
+    std::string music_format;
+    {
+        AES cryptor{AESKeyLength::AES_128};
+        auto t{cryptor.DecryptECB(meta_data, meta_key)};
+        unpad(t);
+        std::string meta_data_string(t.begin() + 6, t.end());
+
+        Json::Value meta_data_json;
+        Json::Reader reader;
+        if (!reader.parse(meta_data_string, meta_data_json)) {
+            std::cerr << "Json parse failed!" << std::endl;
+            return;
+        }
+
+        music_format = meta_data_json["format"].asString();
+    }
+
+    {
+        uint32_t crc32;
+        f.read((char *) &crc32, sizeof(uint32_t));
+        uint32_t image_size;
+        f.seekg(5, std::ios::cur);
+        f.read((char *) &image_size, sizeof(uint32_t));
+
+        auto image_data = new uint8_t[image_size];
+        f.read((char *) image_data, sizeof(uint8_t) * image_size);
+        delete[] image_data;
+    }
+
+    std::string output_file_path;
+    {
+        auto format_index = file_path.size() - 4u;
+        output_file_path = file_path.substr(0, format_index) + "." + music_format;
+    }
+
+    std::ofstream m{output_file_path, std::ios::out | std::ios::binary};
+    {
+        auto chunk = new uint8_t[0x8000];
+
+        while (true) {
+            f.read((char *) chunk, 0x8000);
+            auto chunk_length = f.gcount();
+            if (!chunk_length)
+                break;
+            for (unsigned int i = 1; i <= chunk_length; ++i) {
+                auto j = i & 0xffu;
+                chunk[i - 1] ^= key_box[(key_box[j] + key_box[(key_box[j] + j) & 0xffu]) & 0xffu];
+            }
+            m.write((char *) chunk, chunk_length);
+        }
+
+        delete[] chunk;
+    }
+
+    f.close();
+    m.close();
 }
 
 int main() {
-    dump("D:\\tmp\\netease_music_cpp\\data\\1.ncm");
+    dump(R"(D:\tmp\netease_music_cpp\data\3.ncm)");
     std::cout << "Dump Successfully!" << std::endl;
     return 0;
 }
