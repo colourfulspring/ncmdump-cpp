@@ -1,193 +1,65 @@
-#include "AES.h"
-#include "base64.h"
-#include "json/reader.h"
-#include <cassert>
+#include "utils/CommonUtils.h"
+#include "utils/NCMParser.h"
+
 #include <fstream>
 #include <iostream>
-#include <string>
-#include <utility>
-#include <vector>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#include "binascii.h"
-
-#ifdef __cplusplus
-};
-#endif
-
-typedef std::vector<unsigned char> ustring;
-
-ustring a2b_hex(const char *hex_key) {
-    int key_len = strlen(hex_key);
-    auto key = new unsigned char[key_len / 2 + 1];
-
-    auto res = binascii_unhexlify(hex_key, key_len, key);
-    if (res) {
-        std::cerr << "Error! Invalid hex key!" << std::endl;
-        exit(-1);
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        std::cout << "Usage: ncmdump [ncm file] [-o [output path]]" << std::endl;
+        return 0;
     }
-    ustring ans{key, key + key_len / 2};
 
-    delete[] key;
-    return ans;
-}
-
-std::string b2a_hex(const unsigned char *key, const int key_len) {
-    auto hex_key = new char[key_len * 2 + 1];
-
-    int res = binascii_hexlify(key, key_len, hex_key);
-    if (res) {
-        std::cerr << "Error! Invalid key!" << std::endl;
-        exit(-1);
-    }
-    std::string ans{hex_key};
-
-    delete[] hex_key;
-    return ans;
-}
-
-void dump(const std::string &file_path) {
-    auto core_key{a2b_hex("687A4852416D736F356B496E62617857")};
-    auto meta_key{a2b_hex("2331346C6A6B5F215C5D2630553C2728")};
-    auto unpad = [](ustring &str) {
-        if (strcmp(typeid(str.back()).name(), "unsigned char") == 0) {
-            int num = str.back();
-            str.resize(str.size() - num);
+    std::string in_path;
+    std::string out_path;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            out_path = argv[i + 1];
+            i++;
+            continue;
         }
-    };
-
-    std::ifstream f{file_path, std::ios::in | std::ios::binary};
-    if (!f) {
-        std::cerr << "Error! Open file failed!" << std::endl;
-        exit(-1);
+        in_path = argv[i];
     }
 
-    {
-        auto header = new char[8];
-        f.read((char *) header, sizeof(char) * 8);
-        assert(b2a_hex(reinterpret_cast<const unsigned char *>(header), 8) == "4354454e4644414d");
-        delete[] header;
+    if (in_path.size() < 4 || CommonUtils::ToLower(in_path.substr(in_path.size() - 4)) != ".ncm") {
+        std::cout << "Input file suffix should be \"ncm\"." << std::endl;
+        return -1;
     }
-
-    ustring key_data;
-    {
-        f.seekg(2, std::ios::cur);
-        uint8_t length_byte[4];
-        f.read((char *) length_byte, sizeof(char) * 4);
-        uint32_t key_length = length_byte[0];
-
-        auto ans = new unsigned char[key_length];
-        f.read((char *) ans, sizeof(char) * key_length);
-        for (uint32_t i = 0; i < key_length; ++i)
-            ans[i] ^= 0x64u;
-        key_data.assign(ans, ans + key_length);
-        delete[] ans;
-    }
-
-    {
-        AES cryptor{AESKeyLength::AES_128};// AES-128 has a key of 16 bytes long, so we use it.
-        auto t{cryptor.DecryptECB(key_data, core_key)};
-        unpad(t);
-        key_data.assign(t.begin() + 17, t.end());
-    }
-    auto key_length = key_data.size();
-
-    ustring key_box(256, 0);
-    for (unsigned int i = 1; i < 256u; ++i)
-        key_box[i] = i;
-
-    unsigned char c = 0, last_byte = 0, key_offset = 0;
-    for (int i = 0; i < 256; ++i) {
-        auto swap = key_box[i];
-        c = swap + last_byte + key_data[key_offset];
-        ++key_offset;
-        if (key_offset >= key_length)
-            key_offset = 0;
-        key_box[i] = key_box[c];
-        key_box[c] = swap;
-        last_byte = c;
-    }
-
-    ustring meta_data;
-    {
-        uint32_t meta_length;
-        f.read((char *) &meta_length, sizeof(char) * 4);
-        auto ans = new unsigned char[meta_length];
-        f.read((char *) ans, sizeof(char) * meta_length);
-        for (int i = 0; i < meta_length; ++i) {
-            ans[i] ^= 0x63u;
+    if (out_path.empty()) {
+        out_path = in_path.substr(0, in_path.size() - 4);
+    } else {
+        auto idx = out_path.find_last_of('.');
+        if (idx != std::string::npos) {
+            out_path = out_path.substr(0, idx);
         }
-        meta_data.assign(ans + 22, ans + meta_length);
-        std::string temp(meta_data.begin(), meta_data.end());
-        temp = base64_decode(temp);
-        meta_data.assign(temp.begin(), temp.end());
-
-        delete[] ans;
     }
 
-    std::string music_format;
-    {
-        AES cryptor{AESKeyLength::AES_128};
-        auto t{cryptor.DecryptECB(meta_data, meta_key)};
-        unpad(t);
-        std::string meta_data_string(t.begin() + 6, t.end());
-
-        Json::Value meta_data_json;
-        Json::Reader reader;
-        if (!reader.parse(meta_data_string, meta_data_json)) {
-            std::cerr << "Json parse failed!" << std::endl;
-            return;
-        }
-
-        music_format = meta_data_json["format"].asString();
+    std::fstream f;
+    f.open(in_path, std::ios::in | std::ios::binary);
+    if (!f.is_open()) {
+        std::cout << "Read file failed." << std::endl;
+        return -1;
     }
 
-    {
-        uint32_t crc32;
-        f.read((char *) &crc32, sizeof(uint32_t));
-        uint32_t image_size;
-        f.seekg(5, std::ios::cur);
-        f.read((char *) &image_size, sizeof(uint32_t));
-
-        auto image_data = new uint8_t[image_size];
-        f.read((char *) image_data, sizeof(uint8_t) * image_size);
-        delete[] image_data;
-    }
-
-    std::string output_file_path;
-    {
-        auto format_index = file_path.size() - 4u;
-        output_file_path = file_path.substr(0, format_index) + "." + music_format;
-    }
-
-    std::ofstream m{output_file_path, std::ios::out | std::ios::binary};
-    {
-        auto chunk = new uint8_t[0x8000];
-
-        while (true) {
-            f.read((char *) chunk, 0x8000);
-            auto chunk_length = f.gcount();
-            if (!chunk_length)
-                break;
-            for (unsigned int i = 1; i <= chunk_length; ++i) {
-                auto j = i & 0xffu;
-                chunk[i - 1] ^= key_box[(key_box[j] + key_box[(key_box[j] + j) & 0xffu]) & 0xffu];
-            }
-            m.write((char *) chunk, chunk_length);
-        }
-
-        delete[] chunk;
-    }
-
+    NCMParser parser;
+    parser.data = std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
     f.close();
-    m.close();
-}
 
-int main() {
-    dump(R"(D:\tmp\netease_music_cpp\data\3.ncm)");
-    std::cout << "Dump Successfully!" << std::endl;
+    if (!parser.Decode()) {
+        std::cout << "Decode file failed." << std::endl;
+        return -1;
+    }
+    out_path += "." + parser.format;
+
+    f.open(out_path, std::ios::out | std::ios::binary);
+    if (!f.is_open()) {
+        std::cout << "Write file failed." << std::endl;
+        return -1;
+    }
+    f.write(parser.data.data(), parser.data.size());
+    f.close();
+
+    std::cout << "Decode to " << parser.format << " file finished." << std::endl;
+
     return 0;
 }
