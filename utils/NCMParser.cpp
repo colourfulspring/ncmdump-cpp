@@ -37,12 +37,11 @@ bool NCMParser::Decode() {
 
     // Check header
     {
-        auto header = new char[8];
+        char header[8];
         f.read((char *) header, sizeof(char) * 8);
         if (std::string(header, 8) != ncmHeader) {
             return false;
         }
-        delete[] header;
     }
 
     ustring key_data;
@@ -52,7 +51,7 @@ bool NCMParser::Decode() {
         f.read((char *) length_byte, sizeof(char) * 4);
         uint32_t key_length = length_byte[0];
 
-        auto ans = new unsigned char[key_length];
+        auto ans = new uint8_t[key_length];
         f.read((char *) ans, sizeof(char) * key_length);
         for (uint32_t i = 0; i < key_length; ++i)
             ans[i] ^= 0x64u;
@@ -63,6 +62,7 @@ bool NCMParser::Decode() {
     {
         AES cryptor{AESKeyLength::AES_128};// AES-128 has a key of 16 bytes long, so we use it.
         auto t{cryptor.DecryptECB(key_data, core_key)};
+        t.resize(t.size() - t.back());
         key_data.assign(t.begin() + 17, t.end());
     }
     auto key_length = key_data.size();
@@ -71,10 +71,10 @@ bool NCMParser::Decode() {
     for (unsigned int i = 1; i < 256u; ++i)
         key_box[i] = i;
 
-    unsigned char c = 0, last_byte = 0, key_offset = 0;
+    uint8_t last_byte = 0, key_offset = 0;
     for (int i = 0; i < 256; ++i) {
-        auto swap = key_box[i];
-        c = swap + last_byte + key_data[key_offset];
+        uint8_t swap = key_box[i];
+        uint8_t c = swap + last_byte + key_data[key_offset];
         ++key_offset;
         if (key_offset >= key_length)
             key_offset = 0;
@@ -87,7 +87,7 @@ bool NCMParser::Decode() {
     {
         uint32_t meta_length;
         f.read((char *) &meta_length, sizeof(char) * 4);
-        auto ans = new unsigned char[meta_length];
+        auto ans = new uint8_t[meta_length];
         f.read((char *) ans, sizeof(char) * meta_length);
         for (int i = 0; i < meta_length; ++i) {
             ans[i] ^= 0x63u;
@@ -104,6 +104,7 @@ bool NCMParser::Decode() {
     {
         AES cryptor{AESKeyLength::AES_128};
         auto t{cryptor.DecryptECB(meta_data, meta_key)};
+        t.resize(t.size() - t.back());
         std::string meta_data_string(t.begin() + 6, t.end());
 
         Json::Value meta_data_json;
@@ -121,9 +122,10 @@ bool NCMParser::Decode() {
         f.seekg(5, std::ios::cur);
         f.read((char *) &image_size, sizeof(uint32_t));
 
-        auto image_data = new uint8_t[image_size];
-        f.read((char *) image_data, sizeof(uint8_t) * image_size);// ?
-        delete[] image_data;
+        // auto image_data = new uint8_t[image_size];
+        // f.read((char *) image_data, sizeof(uint8_t) * image_size); // ?
+        // delete[] image_data;
+        f.seekg(image_size, std::ios::cur);
     }
 
     std::string output;
@@ -132,8 +134,9 @@ bool NCMParser::Decode() {
         while (true) {
             f.read((char *) chunk, 0x8000);
             auto chunk_length = f.gcount();
-            if (!chunk_length)
+            if (!chunk_length) {
                 break;
+            }
             for (unsigned int i = 1; i <= chunk_length; ++i) {
                 auto j = i & 0xffu;
                 chunk[i - 1] ^= key_box[(key_box[j] + key_box[(key_box[j] + j) & 0xffu]) & 0xffu];
