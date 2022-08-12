@@ -15,7 +15,7 @@ add_executable(${PROJECT_NAME} ${src})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE AES)
 target_link_libraries(${PROJECT_NAME} PRIVATE base64)
-target_link_libraries(${PROJECT_NAME} PRIVATE jsoncpp_lib)
+target_link_libraries(${PROJECT_NAME} PRIVATE jsoncpp_static)
 
 if (BUILD_TEST)
     add_subdirectory(test)
