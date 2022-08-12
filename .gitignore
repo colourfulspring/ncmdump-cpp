@@ -1,5 +1,5 @@
 .idea
 .vscode
-cmake-debug-*
+cmake-build-*
 build/
 *.user

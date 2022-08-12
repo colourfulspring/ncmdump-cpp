@@ -187,7 +187,7 @@ void dump(const std::string &file_path) {
 }
 
 int main() {
-    dump(R"(D:\tmp\netease_music_cpp\data\3.ncm)");
+    dump(R"(data/1.ncm)");
     std::cout << "Dump Successfully!" << std::endl;
     return 0;
 }
