@@ -1,2 +1,2 @@
 add_executable(test test.cpp)
-target_link_libraries(test PRIVATE jsoncpp_lib)
+target_link_libraries(test PRIVATE jsoncpp_static)

@@ -3,3 +3,6 @@
 cmake-build-*
 *.user
 build
+
+*.mp3
+*.ncm

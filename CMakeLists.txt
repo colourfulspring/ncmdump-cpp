@@ -5,7 +5,7 @@ project(ncmdump CXX C)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_C_STANDARD 89)
 
-set(BUILD_TEST off)
+set(BUILD_TEST on)
 
 add_subdirectory(repo)
 
